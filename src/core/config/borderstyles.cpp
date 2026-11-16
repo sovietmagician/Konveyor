@@ -38,10 +38,11 @@ void decodeLayerColors(const Kdl::Node &node, QList<Paint> &colors)
     expectNoChildren(node);
     requiredArgument(node, QStringLiteral("color"));
     expectArgumentLimit(node, kBorderLayerMaxColors);
-    colors.clear();
+    QList<Paint> decoded;
     for (const Kdl::Value &value : node.arguments) {
-        colors.append(decodePaintValue(value));
+        decoded.append(decodePaintValue(value));
     }
+    colors = std::move(decoded);
 }
 
 void addShapeHandlers(NodeTable &table, BorderLayer &layer)
@@ -84,7 +85,7 @@ void addReactiveHandlers(NodeTable &table, BorderLayer &layer)
     table.insert(QStringLiteral("fire-on"), [&layer](const Kdl::Node &node) { layer.fireOn = decodeFireOn(node); });
 }
 
-BorderLayer decodeBorderLayer(const Kdl::Node &node)
+BorderLayer decodeBorderLayer(LoadContext &context, const Kdl::Node &node)
 {
     expectNoProperties(node);
     expectArgumentLimit(node, 1);
@@ -97,7 +98,7 @@ BorderLayer decodeBorderLayer(const Kdl::Node &node)
     addReactiveHandlers(table, layer);
     QList<LayerDrive> written;
     table.insert(QStringLiteral("drive"), [&written](const Kdl::Node &node) { written.append(decodeLayerDrive(node)); });
-    decodeChildren(node, table, {QStringLiteral("drive")});
+    decodeChildren(context, node, table, {QStringLiteral("drive")});
     for (const LayerDrive &drive : std::as_const(written)) {
         layer.drives.removeIf([&drive](const LayerDrive &other) { return other.setting == drive.setting; });
     }
@@ -204,9 +205,22 @@ void decodeBorderStyle(LoadContext &context, const Kdl::Node &node)
     }
     for (const Kdl::Node &child : node.children) {
         if (child.name != QLatin1String("layer")) {
+            if (context.recover) {
+                reportRecoveredAt(context, child.location, QStringLiteral("unexpected node ") + quoteName(child.name));
+                continue;
+            }
             fail(child, QStringLiteral("unexpected node ") + quoteName(child.name));
         }
-        style.layers.append(decodeBorderLayer(child));
+        try {
+            style.layers.append(decodeBorderLayer(context, child));
+        } catch (const FatalDecodeError &) {
+            throw;
+        } catch (const DecodeError &error) {
+            if (!context.recover) {
+                throw;
+            }
+            reportRecovered(context, error);
+        }
     }
     context.config.borderStyles.append(style);
 }

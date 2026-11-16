@@ -6,6 +6,8 @@ The settings page edits `~/.config/konveyor/config.kdl` in place and keeps your 
 
 Everything lives in `~/.config/konveyor/config.kdl`, a [KDL](https://kdl.dev) file. The shipped default config lists every option with a short explanation. Save the file and the change is live — no restart, no logout.
 
+One bad entry does not disable the rest of the file. Konveyor skips that section and keeps everything else, and inside `binds`, `window-rule` and `border-style` it skips only the bad keybind, rule or layer. The skipped entries are named in a notification and in the log; `konveyor validate` lists all of them. A real KDL syntax error, such as a missing brace or quote, still prevents the file from loading: Konveyor keeps the config that was already running, and after a restart it uses the last config that loaded successfully.
+
 ```kdl
 layout {
     gaps 16

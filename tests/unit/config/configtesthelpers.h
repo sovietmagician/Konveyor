@@ -42,6 +42,21 @@ inline QString failure(const QString &text)
     return QStringLiteral("%1:%2: %3").arg(error.location.line).arg(error.location.column).arg(error.message);
 }
 
+inline std::expected<LoadResult, LoadError> tryRecover(const QString &text)
+{
+    return loadString(text, QStringLiteral("config.kdl"), {.recover = true});
+}
+
+inline LoadResult mustRecover(const QString &text)
+{
+    const auto result = tryRecover(text);
+    if (!result) {
+        QTest::qFail(qPrintable(QStringLiteral("unexpected fatal config error: ") + result.error().toString()), __FILE__, __LINE__);
+        return LoadResult {};
+    }
+    return *result;
+}
+
 inline double proportionOf(const PresetSize &size)
 {
     return std::get<Proportion>(size).value;
@@ -105,6 +120,11 @@ public:
 
     std::expected<LoadResult, LoadError> tryLoad() const { return loadFile(path(QStringLiteral("config.kdl"))); }
 
+    std::expected<LoadResult, LoadError> tryRecover() const
+    {
+        return loadFile(path(QStringLiteral("config.kdl")), {.recover = true});
+    }
+
     LoadResult load() const
     {
         const auto result = tryLoad();
@@ -123,6 +143,16 @@ public:
             return LoadError {};
         }
         return result.error();
+    }
+
+    LoadResult recover() const
+    {
+        const auto result = tryRecover();
+        if (!result) {
+            QTest::qFail(qPrintable(QStringLiteral("unexpected fatal config error: ") + result.error().toString()), __FILE__, __LINE__);
+            return LoadResult {};
+        }
+        return *result;
     }
 
 private:

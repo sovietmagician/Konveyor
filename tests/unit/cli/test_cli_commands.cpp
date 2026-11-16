@@ -79,6 +79,18 @@ private Q_SLOTS:
         QVERIFY(!result.err.isEmpty());
     }
 
+    void validateReportsEveryBadEntry()
+    {
+        const QString path = m_session->dir(QStringLiteral("home")) + QStringLiteral("/many.kdl");
+        QVERIFY(writeFile(path, "layout {\n    gaps \"wide\"\n}\nbinds {\n    Mod+A { no-such-action; }\n}\n"));
+        const ProgramResult result = konveyor({QStringLiteral("validate"), QStringLiteral("-c"), path});
+        QCOMPARE(result.exitCode, 1);
+        QCOMPARE(result.out, QString());
+        QVERIFY2(result.err.contains(QStringLiteral("unsupported value, only numbers are recognized")), qPrintable(result.err));
+        QVERIFY2(result.err.contains(QStringLiteral("unknown action `no-such-action`")), qPrintable(result.err));
+        QCOMPARE(result.err.count(QStringLiteral("error: ")), 2);
+    }
+
     void validateRejectsAMissingFile()
     {
         const ProgramResult result

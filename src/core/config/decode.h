@@ -22,6 +22,16 @@ struct DecodeError : std::runtime_error
     Kdl::Location location;
 };
 
+struct FatalDecodeError : std::runtime_error
+{
+    FatalDecodeError(const QString &message, const Kdl::Location &location);
+
+    QString message;
+    Kdl::Location location;
+};
+
+struct LoadContext;
+
 struct Range
 {
     qint64 min = 0;
@@ -37,6 +47,7 @@ using ValueTable = QHash<QString, ValueHandler>;
 
 [[noreturn]] void failAt(const Kdl::Location &location, const QString &message);
 [[noreturn]] void fail(const Kdl::Node &node, const QString &message);
+[[noreturn]] void failFatally(const Kdl::Location &location, const QString &message);
 
 QString quoteName(const QString &name);
 
@@ -66,6 +77,7 @@ bool flagArgument(const Kdl::Node &node);
 int keywordArgument(const Kdl::Node &node, const QStringList &keywords);
 
 void decodeChildren(const Kdl::Node &node, const NodeTable &table, const QSet<QString> &repeatable = {});
+void decodeChildren(LoadContext &context, const Kdl::Node &node, const NodeTable &table, const QSet<QString> &repeatable = {});
 void decodeProperties(const Kdl::Node &node, const ValueTable &table);
 void addToggleHandlers(NodeTable &table, bool &on, bool &off);
 std::optional<bool> decodeToggle(const Kdl::Node &node, bool on, bool off);

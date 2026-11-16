@@ -1,4 +1,5 @@
 #include "config/decode.h"
+#include "config/sections.h"
 
 #include <algorithm>
 #include <ranges>
@@ -27,6 +28,12 @@ DecodeError::DecodeError(const QString &message, const Kdl::Location &location)
     , location(location)
 { }
 
+FatalDecodeError::FatalDecodeError(const QString &message, const Kdl::Location &location)
+    : std::runtime_error(message.toStdString())
+    , message(message)
+    , location(location)
+{ }
+
 void failAt(const Kdl::Location &location, const QString &message)
 {
     throw DecodeError {message, location};
@@ -35,6 +42,11 @@ void failAt(const Kdl::Location &location, const QString &message)
 void fail(const Kdl::Node &node, const QString &message)
 {
     failAt(node.location, message);
+}
+
+void failFatally(const Kdl::Location &location, const QString &message)
+{
+    throw FatalDecodeError {message, location};
 }
 
 QString quoteName(const QString &name)
@@ -239,6 +251,35 @@ void decodeChildren(const Kdl::Node &node, const NodeTable &table, const QSet<QS
         }
         seen.insert(child.name);
         (*handler)(child);
+    }
+}
+
+void decodeChildren(LoadContext &context, const Kdl::Node &node, const NodeTable &table, const QSet<QString> &repeatable)
+{
+    if (!context.recover) {
+        decodeChildren(node, table, repeatable);
+        return;
+    }
+    QSet<QString> seen;
+    for (const Kdl::Node &child : node.children) {
+        const auto handler = table.constFind(child.name);
+        if (handler == table.constEnd()) {
+            reportRecoveredAt(context, child.location, unexpectedNode(child));
+            continue;
+        }
+        if (!repeatable.contains(child.name) && seen.contains(child.name)) {
+            reportRecoveredAt(context, child.location,
+                QStringLiteral("duplicate node ") + quoteName(child.name) + QStringLiteral(", single node expected"));
+            continue;
+        }
+        seen.insert(child.name);
+        try {
+            (*handler)(child);
+        } catch (const FatalDecodeError &) {
+            throw;
+        } catch (const DecodeError &error) {
+            reportRecovered(context, error);
+        }
     }
 }
 

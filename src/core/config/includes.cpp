@@ -89,7 +89,8 @@ void addSimpleHandlers(NodeTable &table, LoadContext &context)
     table.insert(QStringLiteral("monitor-profile"), [&context](const Kdl::Node &node) { decodeMonitorProfile(context, node); });
     table.insert(QStringLiteral("workspace"), [&context](const Kdl::Node &node) { decodeWorkspace(context, node); });
     table.insert(QStringLiteral("border-style"), [&context](const Kdl::Node &node) { decodeBorderStyle(context, node); });
-    table.insert(QStringLiteral("window-rule"), [&config](const Kdl::Node &node) { config.windowRules.append(decodeWindowRule(node)); });
+    table.insert(QStringLiteral("window-rule"),
+        [&context](const Kdl::Node &node) { context.config.windowRules.append(decodeWindowRule(context, node)); });
     table.insert(QStringLiteral("binds"), [&context](const Kdl::Node &node) { decodeBinds(context, node); });
 }
 
@@ -117,10 +118,33 @@ void processDocument(LoadContext &context, const Kdl::Document &document, const 
     QSet<QString> seen;
     for (const Kdl::Node &node : document.nodes) {
         if (!multipartSections().contains(node.name) && seen.contains(node.name)) {
+            if (context.recover) {
+                reportRecoveredAt(context, node.location,
+                    QStringLiteral("duplicate node ") + quoteName(node.name) + QStringLiteral(", single node expected"));
+                continue;
+            }
             fail(node, QStringLiteral("duplicate node ") + quoteName(node.name) + QStringLiteral(", single node expected"));
         }
         seen.insert(node.name);
-        processNode(context, node, baseDir, stack);
+        if (!context.recover) {
+            processNode(context, node, baseDir, stack);
+            continue;
+        }
+        const Config config = context.config;
+        const QStringList workspaceNames = context.workspaceNames;
+        const auto bindNodes = context.bindNodes;
+        const int recursion = context.recursion;
+        try {
+            processNode(context, node, baseDir, stack);
+        } catch (const FatalDecodeError &) {
+            throw;
+        } catch (const DecodeError &error) {
+            context.config = config;
+            context.workspaceNames = workspaceNames;
+            context.bindNodes = bindNodes;
+            context.recursion = recursion;
+            reportRecovered(context, error);
+        }
     }
 }
 
@@ -139,20 +163,33 @@ void processInclude(LoadContext &context, const Kdl::Node &node, const QString &
     }
     context.files.append(path);
 
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        if (optional && !file.exists()) {
-            context.warnings.append(QStringLiteral("optional include not found: ") + path);
-            return;
+    QString text;
+    if (context.snapshot) {
+        const auto saved = context.snapshot->constFind(path);
+        if (saved == context.snapshot->constEnd()) {
+            if (optional) {
+                context.warnings.append(QStringLiteral("optional include not found: ") + path);
+                return;
+            }
+            fail(node, QStringLiteral("failed to read included config from %1: not in the saved config").arg(path));
         }
-        fail(node, QStringLiteral("failed to read included config from %1: %2").arg(path, file.errorString()));
+        text = *saved;
+    } else {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            if (optional && !file.exists()) {
+                context.warnings.append(QStringLiteral("optional include not found: ") + path);
+                return;
+            }
+            fail(node, QStringLiteral("failed to read included config from %1: %2").arg(path, file.errorString()));
+        }
+        text = QString::fromUtf8(file.readAll());
     }
-    const QString text = QString::fromUtf8(file.readAll());
     const QString name = displayName(context, path);
     context.texts.insert(name, text);
     const auto document = Kdl::parse(text, name);
     if (!document) {
-        failAt(document.error().location, document.error().message);
+        failFatally(document.error().location, document.error().message);
     }
     const int previous = context.recursion;
     context.recursion = previous + 1;

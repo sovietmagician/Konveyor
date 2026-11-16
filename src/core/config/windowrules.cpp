@@ -172,7 +172,7 @@ void addAppearanceHandlers(NodeTable &table, WindowRule &rule)
 
 }
 
-WindowRule decodeWindowRule(const Kdl::Node &node)
+WindowRule decodeWindowRule(LoadContext &context, const Kdl::Node &node)
 {
     expectOnlyChildren(node);
     WindowRule rule;
@@ -183,7 +183,7 @@ WindowRule decodeWindowRule(const Kdl::Node &node)
     addSizeHandlers(table, rule);
     addDynamicHandlers(table, rule);
     addAppearanceHandlers(table, rule);
-    decodeChildren(node, table, {QStringLiteral("match"), QStringLiteral("exclude")});
+    decodeChildren(context, node, table, {QStringLiteral("match"), QStringLiteral("exclude")});
     checkSizeLimit(node, QStringLiteral("width"), rule.minWidth, rule.maxWidth);
     checkSizeLimit(node, QStringLiteral("height"), rule.minHeight, rule.maxHeight);
     return rule;

@@ -120,7 +120,7 @@ Item {
                     }
                 }
                 QQC2.Label {
-                    text: SettingsStore.configError !== "" ? "Not applied: config has an error" : view.justSaved ? "Applied" : "Changes apply instantly"
+                    text: SettingsStore.configError !== "" ? "Not fully applied: config has an error" : view.justSaved ? "Applied" : "Changes apply instantly"
                     color: SettingsStore.configError !== "" ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
                     opacity: SettingsStore.configError !== "" ? 1 : view.justSaved ? 0.85 : 0.45
                     font.pointSize: Kirigami.Theme.smallFont.pointSize

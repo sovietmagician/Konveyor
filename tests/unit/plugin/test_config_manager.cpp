@@ -42,6 +42,11 @@ private Q_SLOTS:
     void waitsForDefaultsThatShipTheBinds();
     void migratesOldBorderConfigsOnceAtStart();
     void leavesABrokenConfigUnmigrated();
+    void appliesTheValidPartsOfABrokenConfig();
+    void keepsGoodBindsFromAPartiallyInvalidConfig();
+    void restoresTheLastGoodConfigAfterASyntaxError();
+    void restoresTheLastGoodConfigWithIncludes();
+    void ignoresTheLastGoodConfigForAnotherPath();
 
 private:
     QString filePath(const QString &name) const;
@@ -254,6 +259,71 @@ void TestConfigManager::leavesABrokenConfigUnmigrated()
     if (applied.open(QIODevice::ReadOnly)) {
         QVERIFY(!QString::fromUtf8(applied.readAll()).contains(QStringLiteral("animated-border-defaults")));
     }
+}
+
+void TestConfigManager::appliesTheValidPartsOfABrokenConfig()
+{
+    const QString text = QStringLiteral("layout {\n    gaps \"wide\"\n}\nhide-desktop-widgets\n");
+    QVERIFY(writeInPlace(filePath(QStringLiteral("config.kdl")), text));
+    ConfigManager manager;
+    manager.start();
+    QCOMPARE(manager.config().layout.gaps, 16.0);
+    QCOMPARE(manager.config().hideDesktopWidgets, true);
+    const QString reported = manager.load();
+    QVERIFY2(reported.contains(QStringLiteral("unsupported value")), qPrintable(reported));
+}
+
+void TestConfigManager::keepsGoodBindsFromAPartiallyInvalidConfig()
+{
+    QVERIFY(writeInPlace(filePath(QStringLiteral("config.kdl")),
+        QStringLiteral("binds {\n    Mod+A { close-window; }\n    Mod+B { no-such-action; }\n}\n")));
+    ConfigManager manager;
+    manager.start();
+    QCOMPARE(manager.config().binds.size(), 1);
+    QCOMPARE(manager.config().binds.first().keyText, QStringLiteral("A"));
+}
+
+void TestConfigManager::restoresTheLastGoodConfigAfterASyntaxError()
+{
+    {
+        ConfigManager manager;
+        manager.start();
+        QCOMPARE(manager.config().layout.gaps, 1.0);
+    }
+    QVERIFY(writeInPlace(filePath(QStringLiteral("config.kdl")), QStringLiteral("layout {\n")));
+    ConfigManager manager;
+    manager.start();
+    QCOMPARE(manager.config().layout.gaps, 1.0);
+}
+
+void TestConfigManager::restoresTheLastGoodConfigWithIncludes()
+{
+    QVERIFY(writeInPlace(filePath(QStringLiteral("extra.kdl")), gapsConfig(5)));
+    QVERIFY(writeInPlace(filePath(QStringLiteral("config.kdl")), gapsConfig(1) + QStringLiteral("include \"extra.kdl\"\n")));
+    {
+        ConfigManager manager;
+        manager.start();
+        QCOMPARE(manager.config().layout.gaps, 5.0);
+    }
+    QVERIFY(writeInPlace(filePath(QStringLiteral("extra.kdl")), QStringLiteral("layout {\n")));
+    ConfigManager manager;
+    manager.start();
+    QCOMPARE(manager.config().layout.gaps, 5.0);
+}
+
+void TestConfigManager::ignoresTheLastGoodConfigForAnotherPath()
+{
+    {
+        ConfigManager manager;
+        manager.start();
+        QCOMPARE(manager.config().layout.gaps, 1.0);
+    }
+    const QString other = filePath(QStringLiteral("other.kdl"));
+    QVERIFY(writeInPlace(other, QStringLiteral("layout {\n")));
+    qputenv("KONVEYOR_CONFIG", other.toUtf8());
+    ConfigManager manager;
+    manager.start();
+    QCOMPARE(manager.config().layout.gaps, 16.0);
 }
 
 QTEST_GUILESS_MAIN(TestConfigManager)

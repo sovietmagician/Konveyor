@@ -19,9 +19,14 @@ Paint solidPaint(int red, int green, int blue, int alpha)
     return Paint {ColorSource::Explicit, QColor(red, green, blue, alpha), std::nullopt};
 }
 
-QString sourceLineOf(const LoadContext &context, const Kdl::Location &location)
+QString formatted(const QString &message, const Kdl::Location &location, const QString &sourceLine)
 {
-    return Kdl::splitLines(context.texts.value(location.file)).value(location.line - 1);
+    QString result = QStringLiteral("%1:%2:%3: %4").arg(location.file).arg(location.line).arg(location.column).arg(message);
+    if (!sourceLine.isEmpty()) {
+        result += QLatin1Char('\n');
+        result += sourceLine;
+    }
+    return result;
 }
 
 void warnAboutHiddenWindowSwipes(LoadContext &context)
@@ -41,10 +46,13 @@ void warnAboutHiddenWindowSwipes(LoadContext &context)
     }
 }
 
-std::expected<LoadResult, LoadError> runLoad(LoadContext &context, const QString &text, const QString &name, const QString &baseDir)
+std::expected<LoadResult, LoadError> runLoad(LoadContext &context, const QString &text, const QString &name, const QString &baseDir,
+    LoadOptions options, const QHash<QString, QString> *snapshot = nullptr)
 {
     context.config = defaultConfig();
     context.rootDir = baseDir;
+    context.recover = options.recover;
+    context.snapshot = snapshot;
     context.texts.insert(name, text);
     const auto document = Kdl::parse(text, name);
     if (!document) {
@@ -56,22 +64,39 @@ std::expected<LoadResult, LoadError> runLoad(LoadContext &context, const QString
         resolveBinds(context);
         warnAboutHiddenWindowSwipes(context);
         warnAboutUnknownBorderStyles(context);
+    } catch (const FatalDecodeError &error) {
+        return std::unexpected(LoadError {error.message, error.location, sourceLineOf(context, error.location), context.files});
     } catch (const DecodeError &error) {
         return std::unexpected(LoadError {error.message, error.location, sourceLineOf(context, error.location), context.files});
     }
-    return LoadResult {context.config, context.files, context.warnings};
+    return LoadResult {context.config, context.files, context.warnings, context.errors};
 }
 
+}
+
+QString sourceLineOf(const LoadContext &context, const Kdl::Location &location)
+{
+    return Kdl::splitLines(context.texts.value(location.file)).value(location.line - 1);
+}
+
+void reportRecoveredAt(LoadContext &context, const Kdl::Location &location, const QString &message)
+{
+    context.errors.append(Diagnostic {message, location, sourceLineOf(context, location)});
+}
+
+void reportRecovered(LoadContext &context, const DecodeError &error)
+{
+    reportRecoveredAt(context, error.location, error.message);
 }
 
 QString LoadError::toString() const
 {
-    QString result = QStringLiteral("%1:%2:%3: %4").arg(location.file).arg(location.line).arg(location.column).arg(message);
-    if (!sourceLine.isEmpty()) {
-        result += QLatin1Char('\n');
-        result += sourceLine;
-    }
-    return result;
+    return formatted(message, location, sourceLine);
+}
+
+QString Diagnostic::toString() const
+{
+    return formatted(message, location, sourceLine);
 }
 
 Config defaultConfig()
@@ -93,16 +118,16 @@ Config defaultConfig()
     return config;
 }
 
-std::expected<LoadResult, LoadError> loadString(const QString &text, const QString &fileName)
+std::expected<LoadResult, LoadError> loadString(const QString &text, const QString &fileName, LoadOptions options)
 {
     const QFileInfo info(fileName);
     const QString name = info.fileName().isEmpty() ? QStringLiteral("config.kdl") : info.fileName();
     LoadContext context;
     context.files.append(fileName);
-    return runLoad(context, text, name, info.path());
+    return runLoad(context, text, name, info.path(), options);
 }
 
-std::expected<LoadResult, LoadError> loadFile(const QString &path)
+std::expected<LoadResult, LoadError> loadFile(const QString &path, LoadOptions options)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -113,7 +138,21 @@ std::expected<LoadResult, LoadError> loadFile(const QString &path)
     const QFileInfo info(path);
     LoadContext context;
     context.files.append(info.absoluteFilePath());
-    return runLoad(context, text, info.fileName(), info.absolutePath());
+    return runLoad(context, text, info.fileName(), info.absolutePath(), options);
+}
+
+std::expected<LoadResult, LoadError> loadSnapshot(const QString &path, const QHash<QString, QString> &files, LoadOptions options)
+{
+    const QFileInfo info(path);
+    const QString absolute = info.absoluteFilePath();
+    const auto text = files.constFind(absolute);
+    if (text == files.constEnd()) {
+        return std::unexpected(LoadError {QStringLiteral("the saved config does not contain %1").arg(absolute),
+            Kdl::Location {absolute, 0, 0}, QString(), QStringList {absolute}});
+    }
+    LoadContext context;
+    context.files.append(absolute);
+    return runLoad(context, *text, info.fileName(), info.absolutePath(), options, &files);
 }
 
 QString configPath()

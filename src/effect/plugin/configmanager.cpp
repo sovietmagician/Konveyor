@@ -9,10 +9,16 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QSaveFile>
 #include <QStandardPaths>
 
 #include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace Konveyor
@@ -32,6 +38,56 @@ QString bundledDefaultConfig()
 QString migrationsPath()
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation) + QStringLiteral("/konveyor/config-migrations");
+}
+
+std::expected<QString, QString> readText(const QString &path, bool allowMissing);
+
+QString lastGoodPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation) + QStringLiteral("/konveyor/config-last-good.json");
+}
+
+QString lastGoodJson(const QString &path, const QHash<QString, QString> &files)
+{
+    QJsonObject texts;
+    for (auto it = files.constBegin(); it != files.constEnd(); ++it) {
+        texts.insert(it.key(), it.value());
+    }
+    QJsonObject object;
+    object.insert(QStringLiteral("version"), 1);
+    object.insert(QStringLiteral("path"), QFileInfo(path).absoluteFilePath());
+    object.insert(QStringLiteral("files"), texts);
+    return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+}
+
+std::optional<QHash<QString, QString>> readLastGood(const QString &target)
+{
+    const auto serialized = readText(lastGoodPath(), true);
+    if (!serialized || serialized->isEmpty()) {
+        return std::nullopt;
+    }
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(serialized->toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) {
+        qCInfo(lcKonveyor).noquote() << "konveyor: could not read" << lastGoodPath() << error.errorString();
+        return std::nullopt;
+    }
+    const QJsonObject object = document.object();
+    const QString absolute = QFileInfo(target).absoluteFilePath();
+    if (object.value(QStringLiteral("version")).toInt() != 1 || object.value(QStringLiteral("path")).toString() != absolute) {
+        return std::nullopt;
+    }
+    const QJsonObject files = object.value(QStringLiteral("files")).toObject();
+    QHash<QString, QString> texts;
+    for (auto it = files.constBegin(); it != files.constEnd(); ++it) {
+        if (it.value().isString()) {
+            texts.insert(it.key(), it.value().toString());
+        }
+    }
+    if (!texts.contains(absolute)) {
+        return std::nullopt;
+    }
+    return texts;
 }
 
 std::expected<QString, QString> readText(const QString &path, bool allowMissing)
@@ -90,10 +146,28 @@ void ConfigManager::start()
 QString ConfigManager::load(const QString &path)
 {
     const QString target = path.isEmpty() ? m_path : path;
-    auto result = Config::loadFile(target);
+    auto result = Config::loadFile(target, {.recover = true});
     if (!result) {
         const QString message = result.error().toString();
         qCInfo(lcKonveyor).noquote() << "konveyor: config" << target << "failed to load:" << message;
+        if (!m_loadedOnce) {
+            if (const auto files = readLastGood(target)) {
+                if (auto restored = Config::loadSnapshot(target, *files, {.recover = true})) {
+                    m_loadedOnce = true;
+                    m_path = target;
+                    m_config = std::move(restored->config);
+                    QStringList watched = result.error().files;
+                    watched.append(restored->files);
+                    watch(watched);
+                    notifyWarnings(restored->warnings);
+                    qCInfo(lcKonveyor).noquote() << "konveyor: using the last config that loaded for" << target;
+                    Q_EMIT configChanged(m_config);
+                    notifyFailure(message + QStringLiteral("\nUsing the last config that loaded."));
+                    Q_EMIT configLoaded(true);
+                    return message;
+                }
+            }
+        }
         notifyFailure(message);
         if (target == m_path) {
             watch(result.error().files);
@@ -110,9 +184,21 @@ QString ConfigManager::load(const QString &path)
     watch(result->files);
     notifyWarnings(result->warnings);
     m_config = std::move(result->config);
+    rememberLastGood(target, result->files);
     Q_EMIT configChanged(m_config);
     Q_EMIT configLoaded(false);
-    return QString();
+    if (result->errors.isEmpty()) {
+        return QString();
+    }
+    QStringList messages;
+    messages.reserve(result->errors.size());
+    for (const Config::Diagnostic &error : std::as_const(result->errors)) {
+        messages.append(error.toString());
+    }
+    const QString message = messages.join(QLatin1Char('\n'));
+    qCWarning(lcKonveyor).noquote() << "konveyor: config entries ignored in" << target << ":\n" << message;
+    notifyRecovered(message);
+    return message;
 }
 
 const Config::Config &ConfigManager::config() const
@@ -242,12 +328,49 @@ void ConfigManager::watch(const QStringList &files)
     }
 }
 
+void ConfigManager::rememberLastGood(const QString &path, const QStringList &files)
+{
+    QHash<QString, QString> texts;
+    for (const QString &file : files) {
+        const auto text = readText(file, false);
+        if (text) {
+            texts.insert(QFileInfo(file).absoluteFilePath(), *text);
+        }
+    }
+    if (texts.isEmpty()) {
+        return;
+    }
+    const QString serialized = lastGoodJson(path, texts);
+    if (m_lastGoodSerialized.isEmpty()) {
+        m_lastGoodSerialized = readText(lastGoodPath(), true).value_or(QString());
+    }
+    if (serialized == m_lastGoodSerialized && QFile::exists(lastGoodPath())) {
+        return;
+    }
+    QDir().mkpath(QFileInfo(lastGoodPath()).absolutePath());
+    QSaveFile file(lastGoodPath());
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text) || file.write(serialized.toUtf8()) < 0 || !file.commit()) {
+        qCInfo(lcKonveyor).noquote() << "konveyor: could not write" << lastGoodPath() << file.errorString();
+        return;
+    }
+    QFile::setPermissions(lastGoodPath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    m_lastGoodSerialized = serialized;
+}
+
 void ConfigManager::notifyFailure(const QString &message) const
 {
     if (m_config.configNotificationDisableFailed) {
         return;
     }
     sendNotification(QStringLiteral("Konveyor: failed to load config"), message);
+}
+
+void ConfigManager::notifyRecovered(const QString &message) const
+{
+    if (m_config.configNotificationDisableFailed) {
+        return;
+    }
+    sendNotification(QStringLiteral("Konveyor: config entries ignored"), message);
 }
 
 void ConfigManager::notifyWarnings(const QStringList &warnings) const

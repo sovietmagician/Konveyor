@@ -34,7 +34,9 @@ private:
     void ensureConfigFileExists() const;
     void migrate();
     void watch(const QStringList &files);
+    void rememberLastGood(const QString &path, const QStringList &files);
     void notifyFailure(const QString &message) const;
+    void notifyRecovered(const QString &message) const;
     void notifyWarnings(const QStringList &warnings) const;
 
     QFileSystemWatcher m_watcher;
@@ -42,6 +44,7 @@ private:
     Config::Config m_config;
     bool m_loadedOnce = false;
     QString m_path;
+    QString m_lastGoodSerialized;
 };
 
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/decode.h"
+#include "config/loader.h"
 #include "config/types.h"
 
 #include <QHash>
@@ -20,7 +21,14 @@ struct LoadContext
     QStringList workspaceNames;
     QHash<QString, std::pair<QString, Kdl::Location>> bindNodes;
     int recursion = 0;
+    bool recover = false;
+    const QHash<QString, QString> *snapshot = nullptr;
+    QList<Diagnostic> errors;
 };
+
+QString sourceLineOf(const LoadContext &context, const Kdl::Location &location);
+void reportRecovered(LoadContext &context, const DecodeError &error);
+void reportRecoveredAt(LoadContext &context, const Kdl::Location &location, const QString &message);
 
 BorderRule decodeBorderRule(const Kdl::Node &node);
 void decodeBorderStyle(LoadContext &context, const Kdl::Node &node);
@@ -54,7 +62,7 @@ void decodeWorkspace(LoadContext &context, const Kdl::Node &node);
 int qtKeyFromKeysym(quint32 keysym);
 Qt::KeyboardModifiers qtModifiers(BindModifiers modifiers);
 
-WindowRule decodeWindowRule(const Kdl::Node &node);
+WindowRule decodeWindowRule(LoadContext &context, const Kdl::Node &node);
 void decodeBinds(LoadContext &context, const Kdl::Node &node);
 void resolveBinds(LoadContext &context);
 

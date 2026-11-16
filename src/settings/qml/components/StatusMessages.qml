@@ -13,7 +13,7 @@ ColumnLayout {
         position: Kirigami.InlineMessage.Position.Header
         type: Kirigami.MessageType.Error
         visible: SettingsStore.configError.length > 0
-        text: "The config has an error, so it can't be applied yet: " + SettingsStore.configError
+        text: "The config has an error, so parts of it are not applied: " + SettingsStore.configError
     }
 
     Kirigami.InlineMessage {

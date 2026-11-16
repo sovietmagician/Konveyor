@@ -319,9 +319,24 @@ void decodeBinds(LoadContext &context, const Kdl::Node &node)
     QList<Bind> binds;
     QStringList signatures;
     for (const Kdl::Node &child : node.children) {
-        const Bind bind = decodeBind(child);
+        Bind bind;
+        try {
+            bind = decodeBind(child);
+        } catch (const FatalDecodeError &) {
+            throw;
+        } catch (const DecodeError &error) {
+            if (!context.recover) {
+                throw;
+            }
+            reportRecovered(context, error);
+            continue;
+        }
         const QString signature = bindSignature(bind, bind.keyModifiers);
         if (signatures.contains(signature)) {
+            if (context.recover) {
+                reportRecoveredAt(context, child.location, QStringLiteral("duplicate keybind ") + quoteName(child.name));
+                continue;
+            }
             failAt(child.location, QStringLiteral("duplicate keybind ") + quoteName(child.name));
         }
         signatures.append(signature);
@@ -344,6 +359,8 @@ void resolveBinds(LoadContext &context)
         }
     }
     QHash<QString, QString> seen;
+    QList<Bind> kept;
+    kept.reserve(config.binds.size());
     for (Bind &bind : config.binds) {
         bind.resolvedModifiers = bind.keyModifiers;
         if (bind.resolvedModifiers.testFlag(BindModifier::Mod)) {
@@ -354,12 +371,20 @@ void resolveBinds(LoadContext &context)
         const auto [name, location] = context.bindNodes.value(bindSignature(bind, bind.keyModifiers));
         const QString signature = bindSignature(bind, bind.resolvedModifiers);
         if (seen.contains(signature)) {
+            if (context.recover) {
+                reportRecoveredAt(context, location,
+                    QStringLiteral("keybind ") + quoteName(name) + QStringLiteral(" is the same as ") + quoteName(seen.value(signature))
+                        + QStringLiteral(" while the Mod key is ") + modKey);
+                continue;
+            }
             failAt(location,
                 QStringLiteral("keybind ") + quoteName(name) + QStringLiteral(" is the same as ") + quoteName(seen.value(signature))
                     + QStringLiteral(" while the Mod key is ") + modKey);
         }
         seen.insert(signature, name);
+        kept.append(std::move(bind));
     }
+    config.binds = std::move(kept);
 }
 
 }
